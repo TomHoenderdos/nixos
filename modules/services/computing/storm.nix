@@ -6,16 +6,15 @@ let
 
   cfg = config.services.storm;
 
-  storm = pkgs.storm.override { logsDir = cfg.logDir; confDir = dirOf stormCnf; };
+  storm = pkgs.storm.override { logsDir = cfg.logDir; confFile = stormCnf; extraLibraryPaths = cfg.extraLibraryPaths; extraJars = cfg.extraJars; };
   jzmq  = pkgs.jzmq;
 
   stormCnf = pkgs.writeText "storm.conf"
   ''
-    java.library.path: "${jzmq}/lib:${jzmq}/share/java:${concatStringsSep ":" cfg.extraLibraryPaths}"
     storm.local.dir: "${cfg.serverDir}"
 
     storm.zookeeper.servers:
-    ${concatMapStrings (host: "    - \"${host}\"") cfg.zookeeperHosts}
+    ${concatMapStrings (host: "    - \"${host}\"\n") cfg.zookeeperHosts}
 
     nimbus.host: "${cfg.nimbusHost}"
     ${cfg.yaml}
@@ -32,16 +31,13 @@ let
           mkdir -p "${cfg.serverDir}" "${cfg.logDir}";
           install -m0705 -o ${cfg.user} -g "nogroup" -d "${cfg.serverDir}";
           install -m0705 -o ${cfg.user} -g "nogroup" -d "${cfg.logDir}";
-
-          cd "${cfg.serverDir}";
-          if ! test -L .storm; then ln -fs "${dirOf stormCnf}" .storm; fi;
         '';
 
-      path = [ pkgs.jdk storm ];
+      path = [ pkgs.jdk pkgs.unzip pkgs.jzmq storm ];
 
       serviceConfig = {
         WorkingDirectory = cfg.serverDir;
-        ExecStart = "${storm}/bin/storm ${name} --config ${baseNameOf stormCnf}";
+        ExecStart = "${storm}/bin/storm ${name}";
         User = cfg.user;
         PermissionsStartOnly = true;
         Restart = "always";
@@ -96,7 +92,12 @@ in
       };
 
       extraLibraryPaths = mkOption {
-        description = "Additional paths to library directories and jars Storm should know about.";
+        description = "Additional paths to native library directories Storm should know about.";
+        default = [];
+        type = types.listOf types.path;
+      };
+      extraJars = mkOption {
+        description = "Additional jar files that should be available to every Storm process, usually native library jars.";
         default = [];
         type = types.listOf types.path;
       };
