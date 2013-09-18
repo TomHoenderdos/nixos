@@ -18,142 +18,6 @@ let
     then "noname"
     else config.networking.hostName;
 
-  options = {
-
-    virtualisation.memorySize =
-      mkOption {
-        default = 384;
-        description =
-          ''
-            Memory size (M) of virtual machine.
-          '';
-      };
-
-    virtualisation.diskSize =
-      mkOption {
-        default = 512;
-        description =
-          ''
-            Disk size (M) of virtual machine.
-          '';
-      };
-
-    virtualisation.diskImage =
-      mkOption {
-        default = "./${vmName}.qcow2";
-        description =
-          ''
-            Path to the disk image containing the root filesystem.
-            The image will be created on startup if it does not
-            exist.
-          '';
-      };
-
-    virtualisation.emptyDiskImages =
-      mkOption {
-        default = [];
-        type = types.list types.int;
-        description =
-          ''
-            Additional disk images to provide to the VM, the value is a list of
-            sizes in megabytes the empty disk should be.
-
-            These disks are writeable by the VM and will be thrown away
-            afterwards.
-          '';
-      };
-
-    virtualisation.graphics =
-      mkOption {
-        default = true;
-        description =
-          ''
-            Whether to run QEMU with a graphics window, or access
-            the guest computer serial port through the host tty.
-          '';
-      };
-
-    virtualisation.pathsInNixDB =
-      mkOption {
-        default = [];
-        description =
-          ''
-            The list of paths whose closure is registered in the Nix
-            database in the VM.  All other paths in the host Nix store
-            appear in the guest Nix store as well, but are considered
-            garbage (because they are not registered in the Nix
-            database in the guest).
-          '';
-      };
-
-    virtualisation.vlans =
-      mkOption {
-        default = [ 1 ];
-        example = [ 1 2 ];
-        description =
-          ''
-            Virtual networks to which the VM is connected.  Each
-            number <replaceable>N</replaceable> in this list causes
-            the VM to have a virtual Ethernet interface attached to a
-            separate virtual network on which it will be assigned IP
-            address
-            <literal>192.168.<replaceable>N</replaceable>.<replaceable>M</replaceable></literal>,
-            where <replaceable>M</replaceable> is the index of this VM
-            in the list of VMs.
-          '';
-      };
-
-    virtualisation.writableStore =
-      mkOption {
-        default = false;
-        description =
-          ''
-            If enabled, the Nix store in the VM is made writable by
-            layering a unionfs-fuse/tmpfs filesystem on top of the host's Nix
-            store.
-          '';
-      };
-
-    virtualisation.writableStoreUseTmpfs =
-      mkOption {
-        default = true;
-        description =
-          ''
-            Use a tmpfs for the writable store instead of writing to the VM's
-            own filesystem.
-          '';
-      };
-
-    networking.primaryIPAddress =
-      mkOption {
-        default = "";
-        internal = true;
-        description = "Primary IP address used in /etc/hosts.";
-      };
-
-    virtualisation.qemu.options =
-      mkOption {
-        default = [];
-        example = [ "-vga std" ];
-        description = "Options passed to QEMU.";
-      };
-
-    virtualisation.useBootLoader =
-      mkOption {
-        default = false;
-        description =
-          ''
-            If enabled, the virtual machine will be booted using the
-            regular boot loader (i.e., GRUB 1 or 2).  This allows
-            testing of the boot loader.  If
-            disabled (the default), the VM directly boots the NixOS
-            kernel and initial ramdisk, bypassing the boot loader
-            altogether.
-          '';
-      };
-
-  };
-
   cfg = config.virtualisation;
 
   qemuGraphics = if cfg.graphics then "" else "-nographic";
@@ -269,149 +133,289 @@ let
 in
 
 {
-  require = [ options ../profiles/qemu-guest.nix ];
+  imports = [ ../profiles/qemu-guest.nix ];
 
-  boot.loader.grub.device = mkOverride 50 "/dev/vda";
+  options = {
 
-  boot.initrd.supportedFilesystems = optional cfg.writableStore "unionfs-fuse";
+    virtualisation.memorySize =
+      mkOption {
+        default = 384;
+        description =
+          ''
+            Memory size (M) of virtual machine.
+          '';
+      };
 
-  boot.initrd.extraUtilsCommands =
-    ''
-      # We need mke2fs in the initrd.
-      cp ${pkgs.e2fsprogs}/sbin/mke2fs $out/bin
-    '';
+    virtualisation.diskSize =
+      mkOption {
+        default = 512;
+        description =
+          ''
+            Disk size (M) of virtual machine.
+          '';
+      };
 
-  boot.initrd.postDeviceCommands =
-    ''
-      # If the disk image appears to be empty, run mke2fs to
-      # initialise.
-      FSTYPE=$(blkid -o value -s TYPE /dev/vda || true)
-      if test -z "$FSTYPE"; then
-          mke2fs -t ext4 /dev/vda
-      fi
-    '';
+    virtualisation.diskImage =
+      mkOption {
+        default = "./${vmName}.qcow2";
+        description =
+          ''
+            Path to the disk image containing the root filesystem.
+            The image will be created on startup if it does not
+            exist.
+          '';
+      };
 
-  boot.initrd.postMountCommands =
-    ''
-      # Mark this as a NixOS machinex.
-      mkdir -p $targetRoot/etc
-      echo -n > $targetRoot/etc/NIXOS
+    virtualisation.emptyDiskImages =
+      mkOption {
+        default = [];
+        type = types.listOf types.int;
+        description =
+          ''
+            Additional disk images to provide to the VM, the value is a list of
+            sizes in megabytes the empty disk should be.
 
-      # Fix the permissions on /tmp.
-      chmod 1777 $targetRoot/tmp
+            These disks are writeable by the VM and will be thrown away
+            afterwards.
+          '';
+      };
 
-      mkdir -p $targetRoot/boot
-      mount -o remount,ro $targetRoot/nix/store
-      ${optionalString cfg.writableStore ''
-        mkdir -p /unionfs-chroot/ro-store
-        mount --rbind $targetRoot/nix/store /unionfs-chroot/ro-store
+    virtualisation.graphics =
+      mkOption {
+        default = true;
+        description =
+          ''
+            Whether to run QEMU with a graphics window, or access
+            the guest computer serial port through the host tty.
+          '';
+      };
 
-        mkdir /unionfs-chroot/rw-store
-        ${if cfg.writableStoreUseTmpfs then ''
-        mount -t tmpfs -o "mode=755" none /unionfs-chroot/rw-store
-        '' else ''
-        mkdir $targetRoot/.nix-rw-store
-        mount --bind $targetRoot/.nix-rw-store /unionfs-chroot/rw-store
+    virtualisation.pathsInNixDB =
+      mkOption {
+        default = [];
+        description =
+          ''
+            The list of paths whose closure is registered in the Nix
+            database in the VM.  All other paths in the host Nix store
+            appear in the guest Nix store as well, but are considered
+            garbage (because they are not registered in the Nix
+            database in the guest).
+          '';
+      };
+
+    virtualisation.vlans =
+      mkOption {
+        default = [ 1 ];
+        example = [ 1 2 ];
+        description =
+          ''
+            Virtual networks to which the VM is connected.  Each
+            number <replaceable>N</replaceable> in this list causes
+            the VM to have a virtual Ethernet interface attached to a
+            separate virtual network on which it will be assigned IP
+            address
+            <literal>192.168.<replaceable>N</replaceable>.<replaceable>M</replaceable></literal>,
+            where <replaceable>M</replaceable> is the index of this VM
+            in the list of VMs.
+          '';
+      };
+
+    virtualisation.writableStore =
+      mkOption {
+        default = false;
+        description =
+          ''
+            If enabled, the Nix store in the VM is made writable by
+            layering a unionfs-fuse/tmpfs filesystem on top of the host's Nix
+            store.
+          '';
+      };
+
+    virtualisation.writableStoreUseTmpfs =
+      mkOption {
+        default = true;
+        description =
+          ''
+            Use a tmpfs for the writable store instead of writing to the VM's
+            own filesystem.
+          '';
+      };
+
+    networking.primaryIPAddress =
+      mkOption {
+        default = "";
+        internal = true;
+        description = "Primary IP address used in /etc/hosts.";
+      };
+
+    virtualisation.qemu.options =
+      mkOption {
+        default = [];
+        example = [ "-vga std" ];
+        description = "Options passed to QEMU.";
+      };
+
+    virtualisation.useBootLoader =
+      mkOption {
+        default = false;
+        description =
+          ''
+            If enabled, the virtual machine will be booted using the
+            regular boot loader (i.e., GRUB 1 or 2).  This allows
+            testing of the boot loader.  If
+            disabled (the default), the VM directly boots the NixOS
+            kernel and initial ramdisk, bypassing the boot loader
+            altogether.
+          '';
+      };
+
+  };
+
+  config = {
+
+    boot.loader.grub.device = mkOverride 50 "/dev/vda";
+
+    boot.initrd.supportedFilesystems = optional cfg.writableStore "unionfs-fuse";
+
+    boot.initrd.extraUtilsCommands =
+      ''
+        # We need mke2fs in the initrd.
+        cp ${pkgs.e2fsprogs}/sbin/mke2fs $out/bin
+      '';
+
+    boot.initrd.postDeviceCommands =
+      ''
+        # If the disk image appears to be empty, run mke2fs to
+        # initialise.
+        FSTYPE=$(blkid -o value -s TYPE /dev/vda || true)
+        if test -z "$FSTYPE"; then
+            mke2fs -t ext4 /dev/vda
+        fi
+      '';
+
+    boot.initrd.postMountCommands =
+      ''
+        # Mark this as a NixOS machinex.
+        mkdir -p $targetRoot/etc
+        echo -n > $targetRoot/etc/NIXOS
+
+        # Fix the permissions on /tmp.
+        chmod 1777 $targetRoot/tmp
+
+        mkdir -p $targetRoot/boot
+        mount -o remount,ro $targetRoot/nix/store
+        ${optionalString cfg.writableStore ''
+          mkdir -p /unionfs-chroot/ro-store
+          mount --rbind $targetRoot/nix/store /unionfs-chroot/ro-store
+
+          mkdir /unionfs-chroot/rw-store
+          ${if cfg.writableStoreUseTmpfs then ''
+          mount -t tmpfs -o "mode=755" none /unionfs-chroot/rw-store
+          '' else ''
+          mkdir $targetRoot/.nix-rw-store
+          mount --bind $targetRoot/.nix-rw-store /unionfs-chroot/rw-store
+          ''}
+
+          unionfs -o allow_other,cow,nonempty,chroot=/unionfs-chroot,max_files=32768,hide_meta_files /rw-store=RW:/ro-store=RO $targetRoot/nix/store
         ''}
+      '';
 
-        unionfs -o allow_other,cow,nonempty,chroot=/unionfs-chroot,max_files=32768,hide_meta_files /rw-store=RW:/ro-store=RO $targetRoot/nix/store
-      ''}
-    '';
+    # After booting, register the closure of the paths in
+    # `virtualisation.pathsInNixDB' in the Nix database in the VM.  This
+    # allows Nix operations to work in the VM.  The path to the
+    # registration file is passed through the kernel command line to
+    # allow `system.build.toplevel' to be included.  (If we had a direct
+    # reference to ${regInfo} here, then we would get a cyclic
+    # dependency.)
+    boot.postBootCommands =
+      ''
+        if [[ "$(cat /proc/cmdline)" =~ regInfo=([^ ]*) ]]; then
+          ${config.environment.nix}/bin/nix-store --load-db < ''${BASH_REMATCH[1]}
+        fi
+      '';
 
-  # After booting, register the closure of the paths in
-  # `virtualisation.pathsInNixDB' in the Nix database in the VM.  This
-  # allows Nix operations to work in the VM.  The path to the
-  # registration file is passed through the kernel command line to
-  # allow `system.build.toplevel' to be included.  (If we had a direct
-  # reference to ${regInfo} here, then we would get a cyclic
-  # dependency.)
-  boot.postBootCommands =
-    ''
-      if [[ "$(cat /proc/cmdline)" =~ regInfo=([^ ]*) ]]; then
-        ${config.environment.nix}/bin/nix-store --load-db < ''${BASH_REMATCH[1]}
-      fi
-    '';
+    virtualisation.pathsInNixDB = [ config.system.build.toplevel ];
 
-  virtualisation.pathsInNixDB = [ config.system.build.toplevel ];
+    virtualisation.qemu.options = [ "-vga std" "-usbdevice tablet" ];
 
-  virtualisation.qemu.options = [ "-vga std" "-usbdevice tablet" ];
+    # Mount the host filesystem via 9P, and bind-mount the Nix store of
+    # the host into our own filesystem.  We use mkOverride to allow this
+    # module to be applied to "normal" NixOS system configuration, where
+    # the regular value for the `fileSystems' attribute should be
+    # disregarded for the purpose of building a VM test image (since
+    # those filesystems don't exist in the VM).
+    fileSystems = mkOverride 10
+      { "/".device = "/dev/vda";
+        "/nix/store" =
+          { device = "store";
+            fsType = "9p";
+            options = "trans=virtio,version=9p2000.L,msize=1048576,cache=loose";
+          };
+        "/tmp/xchg" =
+          { device = "xchg";
+            fsType = "9p";
+            options = "trans=virtio,version=9p2000.L,msize=1048576,cache=loose";
+            neededForBoot = true;
+          };
+        "/tmp/shared" =
+          { device = "shared";
+            fsType = "9p";
+            options = "trans=virtio,version=9p2000.L,msize=1048576";
+            neededForBoot = true;
+          };
+      } // optionalAttrs cfg.useBootLoader
+      { "/boot" =
+          { device = "/dev/disk/by-label/boot";
+            fsType = "ext4";
+            options = "ro";
+            noCheck = true; # fsck fails on a r/o filesystem
+          };
+      };
 
-  # Mount the host filesystem via 9P, and bind-mount the Nix store of
-  # the host into our own filesystem.  We use mkOverride to allow this
-  # module to be applied to "normal" NixOS system configuration, where
-  # the regular value for the `fileSystems' attribute should be
-  # disregarded for the purpose of building a VM test image (since
-  # those filesystems don't exist in the VM).
-  fileSystems = mkOverride 10
-    { "/".device = "/dev/vda";
-      "/nix/store" =
-        { device = "store";
-          fsType = "9p";
-          options = "trans=virtio,version=9p2000.L,msize=1048576,cache=loose";
-        };
-      "/tmp/xchg" =
-        { device = "xchg";
-          fsType = "9p";
-          options = "trans=virtio,version=9p2000.L,msize=1048576,cache=loose";
-          neededForBoot = true;
-        };
-      "/tmp/shared" =
-        { device = "shared";
-          fsType = "9p";
-          options = "trans=virtio,version=9p2000.L,msize=1048576";
-          neededForBoot = true;
-        };
-    } // optionalAttrs cfg.useBootLoader
-    { "/boot" =
-        { device = "/dev/disk/by-label/boot";
-          fsType = "ext4";
-          options = "ro";
-          noCheck = true; # fsck fails on a r/o filesystem
-        };
-    };
+    swapDevices = mkOverride 50 [ ];
 
-  swapDevices = mkOverride 50 [ ];
+    # Don't run ntpd in the guest.  It should get the correct time from KVM.
+    services.ntp.enable = false;
 
-  # Don't run ntpd in the guest.  It should get the correct time from KVM.
-  services.ntp.enable = false;
+    system.build.vm = pkgs.runCommand "nixos-vm" { preferLocalBuild = true; }
+      ''
+        ensureDir $out/bin
+        ln -s ${config.system.build.toplevel} $out/system
+        ln -s ${pkgs.writeScript "run-nixos-vm" startVM} $out/bin/run-${vmName}-vm
+      '';
 
-  system.build.vm = pkgs.runCommand "nixos-vm" { preferLocalBuild = true; }
-    ''
-      ensureDir $out/bin
-      ln -s ${config.system.build.toplevel} $out/system
-      ln -s ${pkgs.writeScript "run-nixos-vm" startVM} $out/bin/run-${vmName}-vm
-    '';
+    # When building a regular system configuration, override whatever
+    # video driver the host uses.
+    services.xserver.videoDriver = mkOverride 50 null;
+    services.xserver.videoDrivers = mkOverride 50 [ "vesa" ];
+    services.xserver.defaultDepth = mkOverride 50 0;
+    services.xserver.resolutions = mkOverride 50 [ { x = 1024; y = 768; } ];
+    services.xserver.monitorSection =
+      ''
+        # Set a higher refresh rate so that resolutions > 800x600 work.
+        HorizSync 30-140
+        VertRefresh 50-160
+      '';
 
-  # When building a regular system configuration, override whatever
-  # video driver the host uses.
-  services.xserver.videoDriver = mkOverride 50 null;
-  services.xserver.videoDrivers = mkOverride 50 [ "vesa" ];
-  services.xserver.defaultDepth = mkOverride 50 0;
-  services.xserver.resolutions = mkOverride 50 [ { x = 1024; y = 768; } ];
-  services.xserver.monitorSection =
-    ''
-      # Set a higher refresh rate so that resolutions > 800x600 work.
-      HorizSync 30-140
-      VertRefresh 50-160
-    '';
+    # Wireless won't work in the VM.
+    networking.wireless.enable = mkOverride 50 false;
 
-  # Wireless won't work in the VM.
-  networking.wireless.enable = mkOverride 50 false;
+    system.requiredKernelConfig = with config.lib.kernelConfig;
+      [ (isEnabled "VIRTIO_BLK")
+        (isEnabled "VIRTIO_PCI")
+        (isEnabled "VIRTIO_NET")
+        (isEnabled "EXT4_FS")
+        (isYes "BLK_DEV")
+        (isYes "PCI")
+        (isYes "EXPERIMENTAL")
+        (isYes "NETDEVICES")
+        (isYes "NET_CORE")
+        (isYes "INET")
+        (isYes "NETWORK_FILESYSTEMS")
+      ] ++ optional (!cfg.graphics) [
+        (isYes "SERIAL_8250_CONSOLE")
+        (isYes "SERIAL_8250")
+      ];
 
-  system.requiredKernelConfig = with config.lib.kernelConfig;
-    [ (isEnabled "VIRTIO_BLK")
-      (isEnabled "VIRTIO_PCI")
-      (isEnabled "VIRTIO_NET")
-      (isEnabled "EXT4_FS")
-      (isYes "BLK_DEV")
-      (isYes "PCI")
-      (isYes "EXPERIMENTAL")
-      (isYes "NETDEVICES")
-      (isYes "NET_CORE")
-      (isYes "INET")
-      (isYes "NETWORK_FILESYSTEMS")
-    ] ++ optional (!cfg.graphics) [
-      (isYes "SERIAL_8250_CONSOLE")
-      (isYes "SERIAL_8250")
-    ];
+  };
 }
